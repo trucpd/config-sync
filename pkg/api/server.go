@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/GoogleContainerTools/config-sync/pkg/api/configsync/v1beta1"
 	"github.com/GoogleContainerTools/config-sync/pkg/k8s"
@@ -128,6 +129,8 @@ func (s *Server) handleRootSyncSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) watchRootSyncEvents(ctx context.Context) {
+	const watchRetryDelay = 2 * time.Second
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -136,7 +139,12 @@ func (s *Server) watchRootSyncEvents(ctx context.Context) {
 		watcher, err := s.k8sClient.WatchRootSyncs(ctx)
 		if err != nil {
 			klog.Errorf("failed to watch RootSync objects: %v", err)
-			return
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(watchRetryDelay):
+			}
+			continue
 		}
 
 		clusterName := s.k8sClient.ClusterName()
@@ -230,6 +238,7 @@ func (b *eventBroadcaster) broadcast(event RootSyncEvent) {
 		select {
 		case sub <- event:
 		default:
+			klog.Warningf("dropping RootSync SSE event for slow subscriber")
 		}
 	}
 }
